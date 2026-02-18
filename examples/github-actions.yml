@@ -1,0 +1,58 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  security-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Install Skill Scanner v2
+        run: |
+          git clone https://github.com/YOUR_ORG/skill-scanner-v2
+          cd skill-scanner-v2
+          sudo bash install.sh
+      
+      - name: Run security scan
+        id: scan
+        run: |
+          skill-scan-v2.sh . || EXIT_CODE=$?
+          echo "exit_code=$EXIT_CODE" >> $GITHUB_OUTPUT
+          
+          if [ ${EXIT_CODE:-0} -ge 10 ]; then
+            echo "::error::Malicious code detected - blocking merge"
+            exit 1
+          elif [ ${EXIT_CODE:-0} -gt 0 ]; then
+            echo "::warning::Suspicious patterns detected - manual review required"
+          fi
+      
+      - name: Upload scan results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: security-scan-results
+          path: |
+            *.log
+            *.txt
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request' && steps.scan.outputs.exit_code != '0'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const exitCode = '${{ steps.scan.outputs.exit_code }}';
+            const status = exitCode >= 10 ? '🚫 MALICIOUS' : '⚠️ SUSPICIOUS';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Security Scan: ${status}\n\nExit Code: ${exitCode}\n\nPlease review the security scan results before merging.`
+            })

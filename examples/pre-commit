@@ -1,0 +1,32 @@
+#!/bin/bash
+# Git pre-commit hook example
+# Copy to .git/hooks/pre-commit and make executable
+# chmod +x .git/hooks/pre-commit
+
+echo "🔍 Running security scan..."
+
+skill-scan-v2.sh . || {
+  EXIT_CODE=$?
+  
+  if [ $EXIT_CODE -ge 10 ]; then
+    echo ""
+    echo "❌ SECURITY SCAN FAILED: Malicious code detected"
+    echo "   Commit blocked for your protection"
+    echo ""
+    echo "   Review the scan output above and fix issues before committing"
+    exit 1
+  elif [ $EXIT_CODE -gt 0 ]; then
+    echo ""
+    echo "⚠️  SECURITY SCAN WARNING: Suspicious patterns detected"
+    echo ""
+    read -p "Continue with commit anyway? (y/N) " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+      echo "Commit cancelled"
+      exit 1
+    fi
+  fi
+}
+
+echo "✅ Security scan passed"
+exit 0

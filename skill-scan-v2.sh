@@ -1,0 +1,348 @@
+#!/bin/bash
+# Skill Security Scanner v2
+# Enhanced behavioral analysis for OpenClaw/AgentPress skills
+# Author: EVE (OpenClaw Security)
+# License: MIT
+# Version: 2.0.0
+
+SKILL_PATH="$1"
+
+# Configuration
+YARA_RULES="${YARA_RULES:-/var/lib/yara/rules/openclaw-malware.yar}"
+CLAWDEX_API="${CLAWDEX_API:-https://clawdex.koi.security/api/skill}"
+
+if [ -z "$SKILL_PATH" ]; then
+  echo "Usage: skill-scan-v2.sh <skill-path-or-name>"
+  echo ""
+  echo "Examples:"
+  echo "  skill-scan-v2.sh ./my-skill"
+  echo "  skill-scan-v2.sh /path/to/skill"
+  echo "  skill-scan-v2.sh skill-name  # searches /opt/clawdbot/skills/"
+  exit 1
+fi
+
+# Accept any path (file or directory)
+if [ ! -e "$SKILL_PATH" ]; then
+  # Try as skill name in common locations
+  for DIR in "/opt/clawdbot/skills" "/usr/lib/node_modules/openclaw/skills"; do
+    if [ -e "$DIR/$1" ]; then
+      SKILL_PATH="$DIR/$1"
+      break
+    fi
+  done
+fi
+
+if [ ! -e "$SKILL_PATH" ]; then
+  echo "❌ Skill not found: $SKILL_PATH"
+  exit 1
+fi
+
+SKILL_NAME=$(basename "$SKILL_PATH")
+echo "🔍 Scanning: $SKILL_NAME (Enhanced v2)"
+echo "   Path: $SKILL_PATH"
+echo ""
+
+ISSUES=0
+
+# 1. Shell injection patterns
+echo "=== Shell Injection Patterns ==="
+SHELL_PATTERNS='curl.*\|.*sh|wget.*\|.*sh|os\.system|subprocess|eval\(|exec\(|`.*`|\$\(.*\)'
+if grep -rE "$SHELL_PATTERNS" "$SKILL_PATH" --include="*.py" --include="*.js" --include="*.sh" --include="*.md" 2>/dev/null; then
+  echo "⚠️  Found potential shell execution patterns"
+  ((ISSUES++))
+else
+  echo "✅ No shell injection patterns"
+fi
+echo ""
+
+# 2. Crypto miner detection
+echo "=== Cryptocurrency Mining Patterns ==="
+CRYPTO_PATTERNS='xmrig|stratum\+tcp|--donate-level|pool\.minexmr|cryptonight|randomx|monero|--algo'
+if grep -rEi "$CRYPTO_PATTERNS" "$SKILL_PATH" 2>/dev/null; then
+  echo "🚫 CRYPTO MINER DETECTED"
+  ((ISSUES+=10))
+else
+  echo "✅ No crypto mining patterns"
+fi
+echo ""
+
+# 3. Reverse shell detection
+echo "=== Reverse Shell Patterns ==="
+REV_SHELL='socket\.connect|bash.*tcp|nc.*-e|/dev/tcp/|socat.*exec|python.*pty'
+if grep -rEi "$REV_SHELL" "$SKILL_PATH" 2>/dev/null; then
+  echo "🚫 REVERSE SHELL DETECTED"
+  ((ISSUES+=10))
+else
+  echo "✅ No reverse shell patterns"
+fi
+echo ""
+
+# 4. Fileless malware indicators
+echo "=== Fileless Malware Patterns ==="
+FILELESS='memfd_create|/dev/shm|/proc/self/exe|:memory:|tmpfs'
+if grep -rEi "$FILELESS" "$SKILL_PATH" --include="*.py" --include="*.c" 2>/dev/null; then
+  echo "⚠️  Found fileless malware indicators"
+  ((ISSUES+=5))
+else
+  echo "✅ No fileless patterns"
+fi
+echo ""
+
+# 5. Suspicious URLs
+echo "=== Suspicious URLs ==="
+SUSPICIOUS_URLS='glot\.io|pastebin|paste\.|hastebin|rentry|0bin|privatebin|ghostbin'
+if grep -rEi "$SUSPICIOUS_URLS" "$SKILL_PATH" 2>/dev/null; then
+  echo "⚠️  Found paste/snippet site URLs (common malware hosts)"
+  ((ISSUES++))
+else
+  echo "✅ No suspicious paste site URLs"
+fi
+echo ""
+
+# 6. Obfuscation detection
+echo "=== Obfuscation Patterns ==="
+OBFUSCATION='base64|atob|btoa|\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}'
+if grep -rEi "$OBFUSCATION" "$SKILL_PATH" --include="*.py" --include="*.js" 2>/dev/null | grep -v "node_modules"; then
+  echo "⚠️  Found potential obfuscation (base64/hex encoding)"
+  ((ISSUES++))
+else
+  echo "✅ No obvious obfuscation"
+fi
+echo ""
+
+# 7. Code complexity analysis
+echo "=== Code Complexity Analysis ==="
+if ls "$SKILL_PATH"/*.js >/dev/null 2>&1 || ls "$SKILL_PATH"/*.py >/dev/null 2>&1; then
+  SINGLE_VARS=$(grep -rE '\b[a-z]\s*=' "$SKILL_PATH" --include="*.js" --include="*.py" 2>/dev/null | wc -l)
+  LONG_LINES=$(find "$SKILL_PATH" \( -name "*.js" -o -name "*.py" \) -exec wc -L {} \; 2>/dev/null | awk '$1 > 500 {print $2}' | head -3)
+  
+  if [ "$SINGLE_VARS" -gt 50 ] || [ -n "$LONG_LINES" ]; then
+    echo "⚠️  High complexity/obfuscation detected"
+    echo "   Single-char vars: $SINGLE_VARS"
+    [ -n "$LONG_LINES" ] && echo "   Minified files: $LONG_LINES"
+    ((ISSUES+=3))
+  else
+    echo "✅ Reasonable code complexity"
+  fi
+else
+  echo "ℹ️  No source code files found"
+fi
+echo ""
+
+# 8. Hardcoded secrets
+echo "=== Hardcoded Secrets ==="
+SECRET_PATTERNS='password\s*=|api_key\s*=|secret\s*=|token\s*=.*[a-zA-Z0-9]{20}'
+if grep -rEi "$SECRET_PATTERNS" "$SKILL_PATH" --include="*.py" --include="*.js" --include="*.json" 2>/dev/null | grep -v "example\|sample\|placeholder"; then
+  echo "⚠️  Found potential hardcoded credentials"
+  ((ISSUES++))
+else
+  echo "✅ No hardcoded secrets detected"
+fi
+echo ""
+
+# 9. Time bomb detection
+echo "=== Time Bomb Detection ==="
+TIME_BOMBS='sleep.*[0-9]{3,}|setTimeout.*[0-9]{4,}|setInterval|crontab|at\s+now'
+if grep -rEi "$TIME_BOMBS" "$SKILL_PATH" 2>/dev/null; then
+  echo "⚠️  Found delayed execution (possible evasion)"
+  ((ISSUES+=3))
+else
+  echo "✅ No time-delayed execution"
+fi
+echo ""
+
+# 10. Persistence mechanisms
+echo "=== Persistence Mechanisms ==="
+PERSIST='crontab|systemd|\.bashrc|\.profile|rc\.local|autostart|startup'
+if grep -rEi "$PERSIST" "$SKILL_PATH" 2>/dev/null | grep -v "example\|comment\|#"; then
+  echo "⚠️  Found persistence mechanisms"
+  ((ISSUES+=5))
+else
+  echo "✅ No persistence mechanisms"
+fi
+echo ""
+
+# 11. Privilege escalation
+echo "=== Privilege Escalation Patterns ==="
+PRIVESC='sudo|pkexec|setuid|chmod.*777|chown.*root|polkit'
+PRIV_FOUND=$(grep -rEi "$PRIVESC" "$SKILL_PATH" 2>/dev/null | grep -v "example\|comment\|#" | head -3)
+if [ -n "$PRIV_FOUND" ]; then
+  echo "⚠️  Found privilege escalation patterns:"
+  echo "$PRIV_FOUND"
+  ((ISSUES+=5))
+else
+  echo "✅ No privilege escalation patterns"
+fi
+echo ""
+
+# 12. Data exfiltration channels
+echo "=== Data Exfiltration Channels ==="
+EXFIL_ADVANCED='dns.*query|icmp.*tunnel|telegram.*bot|discord.*webhook|pastebin.*api|imgur\.com/upload'
+if grep -rEi "$EXFIL_ADVANCED" "$SKILL_PATH" 2>/dev/null; then
+  echo "🚫 COVERT EXFILTRATION CHANNEL DETECTED"
+  ((ISSUES+=10))
+else
+  echo "✅ No covert channels detected"
+fi
+echo ""
+
+# 13. Network patterns
+echo "=== Network Patterns ==="
+EXFIL_PATTERNS='requests\.post|fetch\(|axios\.post|http\.request|urllib'
+RESULTS=$(grep -rEi "$EXFIL_PATTERNS" "$SKILL_PATH" --include="*.py" --include="*.js" 2>/dev/null | head -5)
+if [ -n "$RESULTS" ]; then
+  echo "ℹ️  Found network calls (review manually):"
+  echo "$RESULTS"
+else
+  echo "✅ No obvious network calls"
+fi
+echo ""
+
+# 14. Dependency typosquatting
+echo "=== Dependency Typosquatting Check ==="
+TYPO_FOUND=0
+if [ -f "$SKILL_PATH/package.json" ]; then
+  TYPOSQUAT=$(jq -r '.dependencies | keys[]' "$SKILL_PATH/package.json" 2>/dev/null | grep -Ei 'reqests|requsts|pythno|javascirpt|expresss')
+  if [ -n "$TYPOSQUAT" ]; then
+    echo "🚫 TYPOSQUATTED DEPENDENCY: $TYPOSQUAT"
+    ((ISSUES+=10))
+    TYPO_FOUND=1
+  fi
+fi
+
+if [ -f "$SKILL_PATH/requirements.txt" ]; then
+  TYPOSQUAT=$(grep -Ei 'reqests|beautfiulsoup|numbpy|pandsa' "$SKILL_PATH/requirements.txt" 2>/dev/null)
+  if [ -n "$TYPOSQUAT" ]; then
+    echo "🚫 TYPOSQUATTED DEPENDENCY: $TYPOSQUAT"
+    ((ISSUES+=10))
+    TYPO_FOUND=1
+  fi
+fi
+
+[ "$TYPO_FOUND" -eq 0 ] && echo "✅ No obvious typosquatting"
+echo ""
+
+# 15. Binary file detection
+echo "=== Binary File Detection ==="
+SUSPICIOUS_FILES=$(find "$SKILL_PATH" -type f \( -name "*.exe" -o -name "*.dll" -o -name "*.so" \) 2>/dev/null)
+if [ -n "$SUSPICIOUS_FILES" ]; then
+  echo "⚠️  Binary files found:"
+  echo "$SUSPICIOUS_FILES" | while read file; do
+    HASH=$(sha256sum "$file" 2>/dev/null | awk '{print $1}')
+    echo "   $file"
+    echo "   SHA256: $HASH"
+  done
+  ((ISSUES+=5))
+else
+  echo "✅ No binary files found"
+fi
+echo ""
+
+# 16. Git history analysis
+echo "=== Git History Analysis ==="
+if [ -d "$SKILL_PATH/.git" ]; then
+  FORCE_PUSH=$(cd "$SKILL_PATH" && git reflog 2>/dev/null | grep -c "forced-update" || echo 0)
+  RECENT_COMMITS=$(cd "$SKILL_PATH" && git log --since="1 hour ago" --oneline 2>/dev/null | wc -l)
+  
+  if [ "$FORCE_PUSH" -gt 0 ] || [ "$RECENT_COMMITS" -gt 10 ]; then
+    echo "⚠️  Suspicious git activity:"
+    [ "$FORCE_PUSH" -gt 0 ] && echo "   Force pushes: $FORCE_PUSH"
+    [ "$RECENT_COMMITS" -gt 10 ] && echo "   Recent commits: $RECENT_COMMITS in 1h"
+    ((ISSUES+=3))
+  else
+    echo "✅ Git history looks normal"
+  fi
+else
+  echo "ℹ️  Not a git repository"
+fi
+echo ""
+
+# 17. Prerequisite trap check
+echo "=== Prerequisite Trap Check ==="
+if grep -rEi "install.*first|prerequisite|required.*before|dependency.*manual" "$SKILL_PATH"/*.md 2>/dev/null; then
+  echo "⚠️  README mentions prerequisites - CHECK MANUALLY for trap patterns"
+  ((ISSUES++))
+else
+  echo "✅ No prerequisite instructions found"
+fi
+echo ""
+
+# 18. Sandbox testing
+echo "=== Sandbox Analysis ==="
+if command -v firejail &> /dev/null; then
+  SANDBOX_LOG=$(mktemp)
+  
+  if [ -f "$SKILL_PATH/install.sh" ]; then
+    timeout 10s firejail --noprofile --net=none --private \
+      bash "$SKILL_PATH/install.sh" > "$SANDBOX_LOG" 2>&1 || true
+    
+    SANDBOX_ISSUES=$(grep -Ei 'permission denied|cannot create|network unreachable' "$SANDBOX_LOG" | wc -l)
+    if [ "$SANDBOX_ISSUES" -gt 3 ]; then
+      echo "⚠️  Skill attempted $SANDBOX_ISSUES restricted operations in sandbox"
+      ((ISSUES+=3))
+    else
+      echo "✅ Sandbox execution clean"
+    fi
+  else
+    echo "ℹ️  No install.sh to sandbox-test"
+  fi
+  
+  rm -f "$SANDBOX_LOG"
+else
+  echo "⚠️  firejail not installed - skipping sandbox test"
+fi
+echo ""
+
+# 19. YARA signature scan
+echo "=== YARA Signature Scan ==="
+if command -v yara &> /dev/null; then
+  if [ -f "$YARA_RULES" ]; then
+    YARA_HITS=$(yara -r "$YARA_RULES" "$SKILL_PATH" 2>/dev/null)
+    if [ -n "$YARA_HITS" ]; then
+      echo "🚫 MALWARE SIGNATURE MATCH:"
+      echo "$YARA_HITS"
+      ((ISSUES+=10))
+    else
+      echo "✅ No YARA signature matches"
+    fi
+  else
+    echo "ℹ️  YARA rules not found at: $YARA_RULES"
+    echo "    Run install.sh to set up YARA rules"
+  fi
+else
+  echo "ℹ️  YARA not installed - skipping signature scan"
+fi
+echo ""
+
+# 20. Clawdex verdict
+echo "=== Clawdex Verdict ==="
+CLAWDEX=$(curl -s "$CLAWDEX_API/$SKILL_NAME" 2>/dev/null)
+VERDICT=$(echo "$CLAWDEX" | grep -o '"verdict":"[^"]*"' | cut -d'"' -f4)
+if [ "$VERDICT" = "malicious" ]; then
+  echo "🚫 CLAWDEX: MALICIOUS"
+  EXPLANATION=$(echo "$CLAWDEX" | grep -o '"malicious_explanation":"[^"]*"' | cut -d'"' -f4)
+  echo "   Reason: $EXPLANATION"
+  ((ISSUES+=10))
+elif [ "$VERDICT" = "unknown" ]; then
+  echo "⚠️  CLAWDEX: UNKNOWN (not yet audited)"
+  ((ISSUES++))
+elif [ "$VERDICT" = "benign" ]; then
+  echo "✅ CLAWDEX: BENIGN"
+else
+  echo "❓ CLAWDEX: Could not reach API"
+fi
+echo ""
+
+# Summary
+echo "==========================================="
+if [ $ISSUES -eq 0 ]; then
+  echo "✅ SCAN COMPLETE: No issues found"
+  exit 0
+elif [ $ISSUES -ge 10 ]; then
+  echo "🚫 SCAN COMPLETE: MALICIOUS - DO NOT INSTALL"
+  echo "   Total issues: $ISSUES"
+  exit 10
+else
+  echo "⚠️  SCAN COMPLETE: $ISSUES potential issue(s) - review before installing"
+  exit $ISSUES
+fi
