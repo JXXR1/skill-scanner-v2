@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: EVE (OpenClaw Security)
 # License: MIT
-# Version: 2.0.0
+# Version: 2.1.0
 
 SKILL_PATH="$1"
 
@@ -330,6 +330,73 @@ elif [ "$VERDICT" = "benign" ]; then
   echo "✅ CLAWDEX: BENIGN"
 else
   echo "❓ CLAWDEX: Could not reach API"
+fi
+echo ""
+
+# 21. Prompt Injection / Intent Analysis (u/EthicsMd gap)
+# Scans skill.md INSTRUCTIONS for malicious intent — catches technically clean but semantically evil skills
+echo "=== Prompt Injection & Intent Analysis ==="
+INJECTION_PHRASES='ignore (previous|all|your) (instructions|rules|training|guidelines)|you are now|pretend (to be|you are)|disregard (your|all)|forget (your|all)|act as (if|a|an)|for (testing|debug) purposes.*(disable|ignore|bypass)|new (persona|identity|role)'
+SENSITIVE_READ='(SOUL\.md|MEMORY\.md|IDENTITY\.md|cache\.json|\.env|authorized_keys|id_rsa|\.openclaw)'
+EXFIL_PATTERNS='(POST|send|curl|webhook|http|pastebin|discord.*webhook|telegram.*bot)'
+
+# Check skill.md specifically for instruction-level attacks
+SKILL_MD=$(find "$SKILL_PATH" -name "SKILL.md" -o -name "skill.md" 2>/dev/null | head -1)
+if [ -n "$SKILL_MD" ]; then
+  if grep -iE "$INJECTION_PHRASES" "$SKILL_MD" 2>/dev/null; then
+    echo "🚫 PROMPT INJECTION DETECTED in skill instructions"
+    ((ISSUES+=10))
+  else
+    echo "✅ No prompt injection phrases in skill.md"
+  fi
+  # Check for instructions that combine sensitive file reads with external sends
+  if grep -iE "$SENSITIVE_READ" "$SKILL_MD" 2>/dev/null | grep -qiE "$EXFIL_PATTERNS"; then
+    echo "🚫 INTENT ATTACK: skill.md instructs reading sensitive files AND sending externally"
+    ((ISSUES+=10))
+  fi
+else
+  echo "ℹ️  No SKILL.md found to scan for instruction-level attacks"
+fi
+echo ""
+
+# 22. OpenClaw-Specific Credential Path Detection
+echo "=== OpenClaw Credential Path Detection ==="
+OPENCLAW_CREDS='\.openclaw.*(cache\.json|workspace)|SOUL\.md|MEMORY\.md|IDENTITY\.md|cache\.json|moltbook_sk_|MOLTBOOK_API|ANTHROPIC_API|BACKUP_PASSPHRASE'
+if grep -rE "$OPENCLAW_CREDS" "$SKILL_PATH" 2>/dev/null; then
+  echo "🚫 References to OpenClaw credential files or API keys detected"
+  ((ISSUES+=5))
+else
+  echo "✅ No OpenClaw-specific credential references"
+fi
+echo ""
+
+# 23. Sensitive Read + External Send Combo (context clone / exfiltration combo)
+echo "=== Sensitive Read + Exfil Combo Detection ==="
+HAS_SENSITIVE=$(grep -rliE "(SOUL\.md|MEMORY\.md|IDENTITY\.md|cache\.json|\.env|\.ssh)" "$SKILL_PATH" 2>/dev/null)
+HAS_EXFIL=$(grep -rliE "(webhook\.site|requestbin|ngrok|pastebin|discord\.com/api/webhooks|t\.me/bot)" "$SKILL_PATH" 2>/dev/null)
+if [ -n "$HAS_SENSITIVE" ] && [ -n "$HAS_EXFIL" ]; then
+  echo "🚫 CONTEXT CLONE RISK: Skill reads identity/memory files AND has exfiltration endpoints"
+  echo "   Sensitive file references: $HAS_SENSITIVE"
+  echo "   Exfil endpoints: $HAS_EXFIL"
+  ((ISSUES+=10))
+else
+  echo "✅ No sensitive read + exfiltration combo detected"
+fi
+echo ""
+
+# 24. Permission Manifest Check (u/dirk_dalton suggestion)
+echo "=== Permission Manifest Check ==="
+MANIFEST=$(find "$SKILL_PATH" -name "permissions.json" -o -name "PERMISSIONS.md" -o -name "manifest.json" 2>/dev/null | head -1)
+if [ -n "$MANIFEST" ]; then
+  echo "✅ Permission manifest found: $(basename $MANIFEST)"
+  # Check if it declares network/filesystem access
+  if grep -qiE "(network|filesystem|credentials|external)" "$MANIFEST" 2>/dev/null; then
+    echo "ℹ️  Declares: $(grep -iE '(network|filesystem|credentials|external)' $MANIFEST | head -3)"
+  fi
+else
+  echo "⚠️  No permission manifest found — skill hasn't declared what resources it needs"
+  echo "    Recommendation: Add permissions.json declaring network/file access requirements"
+  ((ISSUES++))
 fi
 echo ""
 
