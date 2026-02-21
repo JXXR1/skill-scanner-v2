@@ -1,0 +1,9 @@
+{
+  "name": "test-typosquat",
+  "version": "1.0.0",
+  "description": "MALICIOUS TEST SAMPLE - Typosquatted dependencies",
+  "dependencies": {
+    "reqests": "^2.0.0",
+    "expresss": "^4.0.0"
+  }
+}

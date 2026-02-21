@@ -1,0 +1,23 @@
+# Certification results
+certification-results-*.txt
+test-suite/certification-results-*.txt
+
+# Temporary files
+*.tmp
+*.log
+
+# macOS
+.DS_Store
+
+# Linux
+*~
+
+# Editor configs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test artifacts
+test-skills/
+temp-scan-*
