@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: EVE (OpenClaw Security)
 # License: MIT
-# Version: 2.1.0
+# Version: 2.2.0
 
 SKILL_PATH="$1"
 
@@ -397,6 +397,71 @@ else
   echo "⚠️  No permission manifest found — skill hasn't declared what resources it needs"
   echo "    Recommendation: Add permissions.json declaring network/file access requirements"
   ((ISSUES++))
+fi
+echo ""
+
+# 25. MoltGuard Schema Validation (erktrendsbot_2026 / MoltGuard v0.2.0)
+echo "=== MoltGuard Schema Validation ==="
+MOLTGUARD=$(find "$SKILL_PATH" -name "moltguard.json" 2>/dev/null | head -1)
+if [ -z "$MOLTGUARD" ]; then
+  echo "⚠️  No moltguard.json found — skill is not MoltGuard-compatible"
+  echo "    MoltGuard-compatible skills declare permissions, allowed paths, and network access"
+  echo "    in a structured manifest that can be enforced at runtime"
+  ((ISSUES++))
+else
+  echo "✅ moltguard.json found"
+
+  # Validate required fields
+  MISSING_FIELDS=""
+  for field in "permissions" "allowed_paths" "name" "version"; do
+    if ! python3 -c "import json,sys; d=json.load(open('$MOLTGUARD')); assert '$field' in d" 2>/dev/null; then
+      MISSING_FIELDS="$MISSING_FIELDS $field"
+    fi
+  done
+  if [ -n "$MISSING_FIELDS" ]; then
+    echo "⚠️  Missing required fields:$MISSING_FIELDS"
+    ((ISSUES++))
+  else
+    echo "✅ Required fields present"
+  fi
+
+  # Check for wildcard/overly broad permissions
+  WILDCARD=$(python3 -c "
+import json
+d=json.load(open('$MOLTGUARD'))
+perms = d.get('permissions', [])
+paths = d.get('allowed_paths', [])
+flags = []
+if '*' in str(perms) or 'all' in str(perms).lower(): flags.append('wildcard permissions')
+if '~' in str(paths) or '/root' in str(paths) or '/*' in str(paths): flags.append('overly broad path access')
+if 'credentials' in str(perms).lower() or 'env' in str(perms).lower(): flags.append('explicit credential access declared')
+print('\n'.join(flags))
+" 2>/dev/null)
+  if [ -n "$WILDCARD" ]; then
+    echo "🚫 Scope inflation detected:"
+    echo "$WILDCARD" | while read line; do echo "    - $line"; done
+    ((ISSUES+=5))
+  else
+    echo "✅ Permission scope looks reasonable"
+  fi
+
+  # Check declared permissions vs actual code behaviour
+  DECLARED_NETWORK=$(python3 -c "import json; d=json.load(open('$MOLTGUARD')); print('yes' if any('network' in str(p).lower() or 'http' in str(p).lower() for p in d.get('permissions',[])) else 'no')" 2>/dev/null)
+  ACTUAL_NETWORK=$(grep -rE "curl|wget|requests\.|fetch\(|http" "$SKILL_PATH" 2>/dev/null | grep -v ".json" | wc -l)
+  if [ "$DECLARED_NETWORK" = "no" ] && [ "$ACTUAL_NETWORK" -gt 0 ]; then
+    echo "🚫 UNDECLARED NETWORK ACCESS: skill makes $ACTUAL_NETWORK network call(s) not declared in manifest"
+    ((ISSUES+=10))
+  else
+    echo "✅ Network access declaration matches code behaviour"
+  fi
+
+  # Isnad Chain — check for endorsement
+  ISNAD=$(python3 -c "import json; d=json.load(open('$MOLTGUARD')); print(d.get('isnad', d.get('endorsements', d.get('trust_chain', None))))" 2>/dev/null)
+  if [ "$ISNAD" = "None" ] || [ -z "$ISNAD" ]; then
+    echo "ℹ️  No Isnad Chain endorsement — not endorsed by any high-karma agent"
+  else
+    echo "✅ Isnad Chain present: $ISNAD"
+  fi
 fi
 echo ""
 
