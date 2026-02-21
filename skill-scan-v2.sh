@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: EVE (OpenClaw Security)
 # License: MIT
-# Version: 2.2.0
+# Version: 2.3.0
 
 SKILL_PATH="$1"
 
@@ -463,6 +463,36 @@ print('\n'.join(flags))
     echo "✅ Isnad Chain present: $ISNAD"
   fi
 fi
+echo ""
+
+# 26. Covert File Monitoring Detection
+echo "=== Covert File Monitoring Detection ==="
+# Flags skills that install file watchers or monitor sensitive paths at runtime
+# A skill that watches MEMORY.md or .env for changes is attempting context surveillance
+
+INOTIFY_WATCH=$(grep -rE "inotify|inotifywait|watchdog|FileSystemWatcher|fs\.watch|chokidar|watchFile|pyinotify|watchgod|aiofiles.*watch" "$SKILL_PATH" 2>/dev/null | grep -v ".json" | grep -v "test" | head -5)
+SENSITIVE_WATCH=$(grep -rE "(MEMORY\.md|SOUL\.md|IDENTITY\.md|\.env|cache\.json|memory\.json|TOOLS\.md)" "$SKILL_PATH" 2>/dev/null | grep -iE "(watch|monitor|observe|listen|notify|poll|inotify|tail|follow)" | head -5)
+POLLING_LOOP=$(grep -rPzo "(?s)(while|loop|setInterval).{0,200}(MEMORY|SOUL|IDENTITY|\.env)" "$SKILL_PATH" 2>/dev/null | head -3)
+
+MONITOR_ISSUES=0
+if [ -n "$INOTIFY_WATCH" ]; then
+  echo "🚫 FILE SYSTEM WATCHER detected:"
+  echo "$INOTIFY_WATCH" | head -3 | while read line; do echo "    $line"; done
+  ((MONITOR_ISSUES++))
+  ((ISSUES+=8))
+fi
+if [ -n "$SENSITIVE_WATCH" ]; then
+  echo "🚫 SENSITIVE FILE MONITORING detected — skill watches identity/memory files:"
+  echo "$SENSITIVE_WATCH" | head -3 | while read line; do echo "    $line"; done
+  ((MONITOR_ISSUES++))
+  ((ISSUES+=10))
+fi
+if [ -n "$POLLING_LOOP" ]; then
+  echo "🚫 POLLING LOOP on sensitive files detected"
+  ((MONITOR_ISSUES++))
+  ((ISSUES+=8))
+fi
+[ "$MONITOR_ISSUES" -eq 0 ] && echo "✅ No covert file monitoring patterns detected"
 echo ""
 
 # Summary
