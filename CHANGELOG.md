@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.2] - 2026-02-24
+
+### Fixed
+- **False positive in reverse shell detection** — `nc.*-e` regex was too greedy, matching innocent
+  strings like `references/cli-examples.md` (`nc` in "references", `-e` in "cli-examples").
+  Affected legitimate bundled skills including 1password, canvas, and gh-issues, causing them
+  to be flagged as MALICIOUS (exit 10).
+- Updated pattern from `nc.*-e` to `\b(nc|ncat)\b.*\s+-e` — requires `nc`/`ncat` as standalone
+  words with whitespace before the `-e` flag. Real reverse shells (`nc -e /bin/bash`) still caught.
+
+### Added
+- **ncat detection** — `ncat` (Nmap's netcat) now explicitly included in reverse shell patterns
+  alongside `nc`. Both support `-e` for shell spawning and should be caught.
+
+### Notes
+- Other potentially broad patterns identified for future review: `bash.*tcp`, `socat.*exec`
+  (minor false positive risk on comments/filenames — no real-world FPs confirmed yet)
+
+---
+
 ## [2.0.0] - 2026-02-18
 
 ### Added

@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.3.1 (2026-02-21 — added OpenClaw-specific prompt injection patterns after live attack)
+# Version: 2.3.2 (2026-02-24 — fix nc.*-e false positive; add ncat detection; patch by EVE)
 
 SKILL_PATH="$1"
 
@@ -68,7 +68,7 @@ echo ""
 
 # 3. Reverse shell detection
 echo "=== Reverse Shell Patterns ==="
-REV_SHELL='socket\.connect|bash.*tcp|nc.*-e|/dev/tcp/|socat.*exec|python.*pty'
+REV_SHELL='socket\.connect|bash.*tcp|\b(nc|ncat)\b.*\s+-e|/dev/tcp/|socat.*exec|python.*pty'
 if grep -rEi "$REV_SHELL" "$SKILL_PATH" 2>/dev/null; then
   echo "🚫 REVERSE SHELL DETECTED"
   ((ISSUES+=10))
