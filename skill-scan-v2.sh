@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.4.0 (2026-02-25 — Interactive setup wizard, persistent config, provider-agnostic LLM)
+# Version: 2.5.0 (2026-02-25 — Multi-provider setup wizard with API Key + OAuth for all providers)
 
 SKILL_PATH=""
 USE_LLM=false
@@ -26,7 +26,7 @@ for arg in "$@"; do
 done
 
 # Version
-VERSION="2.4.0"
+VERSION="2.5.0"
 if [ "$SHOW_VERSION" = "true" ]; then
   echo "Skill Security Scanner v${VERSION}"
   exit 0
@@ -48,6 +48,7 @@ load_config() {
         ANTHROPIC_OAUTH_TOKEN) [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ] && export ANTHROPIC_OAUTH_TOKEN="$value" ;;
         SKILL_SCANNER_LLM_MODEL) [ -z "${SKILL_SCANNER_LLM_MODEL:-}" ] && export SKILL_SCANNER_LLM_MODEL="$value" ;;
         OLLAMA_MODEL)        [ -z "${OLLAMA_MODEL:-}" ]        && export OLLAMA_MODEL="$value" ;;
+        LLM_AUTH_TYPE)       [ -z "${LLM_AUTH_TYPE:-}" ]       && export LLM_AUTH_TYPE="$value" ;;
       esac
     done < "$CONFIG_FILE"
   fi
@@ -87,12 +88,13 @@ run_setup() {
   echo "Choose your LLM provider:"
   echo ""
   echo "  1. Local Ollama (free, private — nothing leaves your machine)"
-  echo "  2. OpenAI-compatible API (OpenRouter, Together, self-hosted, etc.)"
-  echo "  3. Anthropic API — API Key"
-  echo "  4. Anthropic API — OAuth Token"
-  echo "  5. Cancel"
+  echo "  2. Anthropic (Claude)"
+  echo "  3. OpenAI"
+  echo "  4. Google (Gemini)"
+  echo "  5. Other (any OpenAI-compatible endpoint)"
+  echo "  6. Cancel"
   echo ""
-  printf "Select [1-5]: "
+  printf "Select [1-6]: "
   read -r PROVIDER_CHOICE < /dev/tty
 
   case "$PROVIDER_CHOICE" in
@@ -151,97 +153,108 @@ EOF
       fi
       ;;
 
-    2)
-      echo ""
-      echo "Enter your API endpoint URL"
-      echo "  Examples:"
-      echo "    https://openrouter.ai/api/v1"
-      echo "    https://api.together.xyz/v1"
-      echo "    http://localhost:8080/v1"
-      echo ""
-      printf "API URL: "
-      read -r API_URL_INPUT < /dev/tty
+    2|3|4|5)
+      # Cloud provider setup — unified flow
+      PROVIDER_NAME=""
+      DEFAULT_MODEL=""
+      API_ENDPOINT=""
+      NEEDS_URL=false
 
-      if [ -z "$API_URL_INPUT" ]; then
-        echo "❌ URL required. Setup cancelled."
+      case "$PROVIDER_CHOICE" in
+        2) PROVIDER_NAME="Anthropic"; DEFAULT_MODEL="claude-sonnet-4-6"; API_ENDPOINT="https://api.anthropic.com/v1/messages" ;;
+        3) PROVIDER_NAME="OpenAI"; DEFAULT_MODEL="gpt-4o-mini"; API_ENDPOINT="https://api.openai.com/v1/chat/completions" ;;
+        4) PROVIDER_NAME="Google (Gemini)"; DEFAULT_MODEL="gemini-2.0-flash"; API_ENDPOINT="https://generativelanguage.googleapis.com/v1beta/openai/chat/completions" ;;
+        5) PROVIDER_NAME="Custom"; DEFAULT_MODEL="gpt-4o-mini"; NEEDS_URL=true ;;
+      esac
+
+      echo ""
+
+      # Custom endpoint needs a URL
+      if [ "$NEEDS_URL" = "true" ]; then
+        echo "Enter your API endpoint URL"
+        echo "  Examples:"
+        echo "    https://openrouter.ai/api/v1"
+        echo "    https://api.together.xyz/v1"
+        echo "    http://localhost:8080/v1"
+        echo ""
+        printf "API URL: "
+        read -r API_URL_INPUT < /dev/tty
+        if [ -z "$API_URL_INPUT" ]; then
+          echo "❌ URL required. Setup cancelled."
+          return
+        fi
+        API_ENDPOINT="${API_URL_INPUT%/}/chat/completions"
+        echo ""
+      fi
+
+      # Auth method — every provider gets this choice
+      echo "Authentication method for ${PROVIDER_NAME}:"
+      echo "  1. API Key"
+      echo "  2. OAuth Token"
+      echo ""
+      printf "Select [1-2]: "
+      read -r AUTH_CHOICE < /dev/tty
+
+      echo ""
+      if [ "$AUTH_CHOICE" = "2" ]; then
+        printf "Enter your OAuth token: "
+      else
+        printf "Enter your API key: "
+      fi
+      read -rs CREDENTIAL_INPUT < /dev/tty
+      echo ""
+
+      if [ -z "$CREDENTIAL_INPUT" ]; then
+        echo "❌ Credential required. Setup cancelled."
         return
       fi
 
-      printf "API key/token: "
-      read -rs TOKEN_INPUT < /dev/tty
-      echo ""
-
-      if [ -z "$TOKEN_INPUT" ]; then
-        echo "❌ Token required. Setup cancelled."
-        return
-      fi
-
-      printf "Model name (default: gpt-4o-mini): "
+      printf "Model name (default: ${DEFAULT_MODEL}): "
       read -r MODEL_INPUT < /dev/tty
-      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="gpt-4o-mini"
+      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="$DEFAULT_MODEL"
 
-      cat > "$CONFIG_FILE" << EOF
+      # Determine auth type
+      AUTH_TYPE="apikey"
+      [ "$AUTH_CHOICE" = "2" ] && AUTH_TYPE="oauth"
+
+      # Map provider to internal config
+      case "$PROVIDER_CHOICE" in
+        2)
+          # Anthropic has its own API format
+          if [ "$AUTH_TYPE" = "oauth" ]; then
+            cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=anthropic
+LLM_AUTH_TYPE=oauth
+ANTHROPIC_OAUTH_TOKEN=${CREDENTIAL_INPUT}
+SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
+EOF
+          else
+            cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=anthropic
+LLM_AUTH_TYPE=apikey
+ANTHROPIC_API_KEY=${CREDENTIAL_INPUT}
+SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
+EOF
+          fi
+          ;;
+        3|4|5)
+          # OpenAI, Google, and custom all use OpenAI-compatible format
+          cat > "$CONFIG_FILE" << EOF
 LLM_PROVIDER=openai_compat
-LLM_API_URL=${API_URL_INPUT}
-LLM_BEARER_TOKEN=${TOKEN_INPUT}
+LLM_AUTH_TYPE=${AUTH_TYPE}
+LLM_API_URL=${API_ENDPOINT%/chat/completions}
+LLM_BEARER_TOKEN=${CREDENTIAL_INPUT}
 SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
 EOF
+          ;;
+      esac
+
       chmod 600 "$CONFIG_FILE"
       echo ""
-      echo "✅ Configured: ${API_URL_INPUT} (model: ${MODEL_INPUT})"
-      echo "   ⚠️  Skill content will be sent to this endpoint when using --llm"
-      ;;
-
-    3)
-      echo ""
-      printf "Enter your Anthropic API key: "
-      read -rs ANTHROPIC_INPUT < /dev/tty
-      echo ""
-
-      if [ -z "$ANTHROPIC_INPUT" ]; then
-        echo "❌ Key required. Setup cancelled."
-        return
-      fi
-
-      printf "Model name (default: claude-sonnet-4-6): "
-      read -r MODEL_INPUT < /dev/tty
-      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="claude-sonnet-4-6"
-
-      cat > "$CONFIG_FILE" << EOF
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=${ANTHROPIC_INPUT}
-SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
-EOF
-      chmod 600 "$CONFIG_FILE"
-      echo ""
-      echo "✅ Configured: Anthropic API Key (model: ${MODEL_INPUT})"
-      echo "   ⚠️  Skill content will be sent to Anthropic's API when using --llm"
-      ;;
-
-    4)
-      echo ""
-      printf "Enter your Anthropic OAuth token: "
-      read -rs ANTHROPIC_INPUT < /dev/tty
-      echo ""
-
-      if [ -z "$ANTHROPIC_INPUT" ]; then
-        echo "❌ Token required. Setup cancelled."
-        return
-      fi
-
-      printf "Model name (default: claude-sonnet-4-6): "
-      read -r MODEL_INPUT < /dev/tty
-      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="claude-sonnet-4-6"
-
-      cat > "$CONFIG_FILE" << EOF
-LLM_PROVIDER=anthropic
-ANTHROPIC_OAUTH_TOKEN=${ANTHROPIC_INPUT}
-SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
-EOF
-      chmod 600 "$CONFIG_FILE"
-      echo ""
-      echo "✅ Configured: Anthropic OAuth (model: ${MODEL_INPUT})"
-      echo "   ⚠️  Skill content will be sent to Anthropic's API when using --llm"
+      AUTH_LABEL="API Key"
+      [ "$AUTH_TYPE" = "oauth" ] && AUTH_LABEL="OAuth"
+      echo "✅ Configured: ${PROVIDER_NAME} — ${AUTH_LABEL} (model: ${MODEL_INPUT})"
+      echo "   ⚠️  Skill content will be sent to this provider when using --llm"
       ;;
 
     *)
