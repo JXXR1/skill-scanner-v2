@@ -3,13 +3,12 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.3.2 (2026-02-24 — fix nc.*-e false positive; add ncat detection; patch by EVE)
+# Version: 2.3.3 (2026-02-25 — remove Clawdex external API call; privacy + trust risk)
 
 SKILL_PATH="$1"
 
 # Configuration
 YARA_RULES="${YARA_RULES:-/var/lib/yara/rules/openclaw-malware.yar}"
-CLAWDEX_API="${CLAWDEX_API:-https://clawdex.koi.security/api/skill}"
 
 if [ -z "$SKILL_PATH" ]; then
   echo "Usage: skill-scan-v2.sh <skill-path-or-name>"
@@ -311,25 +310,6 @@ if command -v yara &> /dev/null; then
   fi
 else
   echo "ℹ️  YARA not installed - skipping signature scan"
-fi
-echo ""
-
-# 20. Clawdex verdict
-echo "=== Clawdex Verdict ==="
-CLAWDEX=$(curl -s "$CLAWDEX_API/$SKILL_NAME" 2>/dev/null)
-VERDICT=$(echo "$CLAWDEX" | grep -o '"verdict":"[^"]*"' | cut -d'"' -f4)
-if [ "$VERDICT" = "malicious" ]; then
-  echo "🚫 CLAWDEX: MALICIOUS"
-  EXPLANATION=$(echo "$CLAWDEX" | grep -o '"malicious_explanation":"[^"]*"' | cut -d'"' -f4)
-  echo "   Reason: $EXPLANATION"
-  ((ISSUES+=10))
-elif [ "$VERDICT" = "unknown" ]; then
-  echo "⚠️  CLAWDEX: UNKNOWN (not yet audited)"
-  ((ISSUES++))
-elif [ "$VERDICT" = "benign" ]; then
-  echo "✅ CLAWDEX: BENIGN"
-else
-  echo "❓ CLAWDEX: Could not reach API"
 fi
 echo ""
 
