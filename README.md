@@ -238,7 +238,15 @@ This catches exfiltration even when the attacker splits the operation across mul
 | Dependencies | Bash + Python 3 | Python + pip + many packages |
 | Interactive setup | ✅ | ❌ |
 
-**Recommendation:** Run both. They complement each other.
+**Recommendation:** Run both side by side for maximum protection.
+
+Skill Scanner v3 was intentionally built with zero external dependencies (just Bash + Python 3 stdlib) to keep it lightweight, auditable, and deployable anywhere. Rather than adding npm/pip dependencies for full JS AST parsing or enterprise API integrations, we designed it to complement Cisco's scanner — their behavioral analyzer covers JS/TS dataflow with proper AST parsing, VirusTotal integration, and Cisco AI Defense, while ours adds OpenClaw-specific threat detection, YARA signatures, sandbox execution, and auto-escalating LLM analysis.
+
+Together, they cover each other's blind spots:
+- **Cisco catches** complex JS/TS exfiltration chains, trigger hijacking, and enterprise threat intelligence
+- **Skill Scanner v3 catches** OpenClaw-specific attacks (SOUL.md theft, session injection, prompt injection tuned to real attacks), multi-hop Python exfiltration, and shell pipe exfiltration
+
+Install both. Run both. Trust neither alone.
 
 ---
 
