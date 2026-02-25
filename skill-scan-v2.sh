@@ -3,19 +3,22 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.5.0 (2026-02-25 — Multi-provider setup wizard with API Key + OAuth for all providers)
+# Version: 2.6.0 (2026-02-25 — Auto-escalation: LLM engages automatically on ambiguous findings)
 
 SKILL_PATH=""
 USE_LLM=false
+NO_LLM=false
 SKIP_CONFIRM=false
 RUN_SETUP=false
 SHOW_VERSION=false
+AMBIGUOUS_FLAGS=""
 CONFIG_FILE="${SKILL_SCANNER_CONFIG:-$HOME/.skill-scanner-v2.conf}"
 
 # Parse arguments
 for arg in "$@"; do
   case "$arg" in
     --llm)     USE_LLM=true ;;
+    --no-llm)  NO_LLM=true ;;
     --yes|-y)  SKIP_CONFIRM=true ;;
     --setup)   RUN_SETUP=true ;;
     --version) SHOW_VERSION=true ;;
@@ -26,7 +29,7 @@ for arg in "$@"; do
 done
 
 # Version
-VERSION="2.5.0"
+VERSION="2.6.0"
 if [ "$SHOW_VERSION" = "true" ]; then
   echo "Skill Security Scanner v${VERSION}"
   exit 0
@@ -307,11 +310,15 @@ if [ -z "$SKILL_PATH" ]; then
   echo "Usage: skill-scan-v2.sh <skill-path-or-name> [options]"
   echo ""
   echo "Options:"
-  echo "  --llm       Enable LLM semantic analysis (requires provider config)"
+  echo "  --llm       Force LLM analysis on all scans (not just suspicious)"
+  echo "  --no-llm    Disable LLM auto-escalation (pattern scan only)"
   echo "  --yes       Skip confirmation prompts"
   echo "  --setup     Interactive setup wizard (configure LLM provider)"
   echo "  --config    Show current configuration"
   echo "  --version   Show version"
+  echo ""
+  echo "When LLM is configured (via --setup), it auto-engages on suspicious"
+  echo "findings that pattern matching alone can't validate."
   echo ""
   echo "Examples:"
   echo "  skill-scan-v2.sh ./my-skill                # pattern scan (26 modules, free)"
@@ -349,6 +356,7 @@ echo "=== Shell Injection Patterns ==="
 SHELL_PATTERNS='curl.*\|.*sh|wget.*\|.*sh|os\.system|subprocess|eval\(|exec\(|`.*`|\$\(.*\)'
 if grep -rE "$SHELL_PATTERNS" "$SKILL_PATH" --include="*.py" --include="*.js" --include="*.sh" --include="*.md" 2>/dev/null; then
   echo "⚠️  Found potential shell execution patterns"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}shell_exec,"
   ((ISSUES++))
 else
   echo "✅ No shell injection patterns"
@@ -382,6 +390,7 @@ echo "=== Fileless Malware Patterns ==="
 FILELESS='memfd_create|/dev/shm|/proc/self/exe|:memory:|tmpfs'
 if grep -rEi "$FILELESS" "$SKILL_PATH" --include="*.py" --include="*.c" 2>/dev/null; then
   echo "⚠️  Found fileless malware indicators"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}fileless,"
   ((ISSUES+=5))
 else
   echo "✅ No fileless patterns"
@@ -404,6 +413,7 @@ echo "=== Obfuscation Patterns ==="
 OBFUSCATION='base64|atob|btoa|\\x[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}'
 if grep -rEi "$OBFUSCATION" "$SKILL_PATH" --include="*.py" --include="*.js" 2>/dev/null | grep -v "node_modules"; then
   echo "⚠️  Found potential obfuscation (base64/hex encoding)"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}obfuscation,"
   ((ISSUES++))
 else
   echo "✅ No obvious obfuscation"
@@ -420,6 +430,7 @@ if ls "$SKILL_PATH"/*.js >/dev/null 2>&1 || ls "$SKILL_PATH"/*.py >/dev/null 2>&
     echo "⚠️  High complexity/obfuscation detected"
     echo "   Single-char vars: $SINGLE_VARS"
     [ -n "$LONG_LINES" ] && echo "   Minified files: $LONG_LINES"
+    AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}complexity,"
     ((ISSUES+=3))
   else
     echo "✅ Reasonable code complexity"
@@ -434,6 +445,7 @@ echo "=== Hardcoded Secrets ==="
 SECRET_PATTERNS='password\s*=|api_key\s*=|secret\s*=|token\s*=.*[a-zA-Z0-9]{20}'
 if grep -rEi "$SECRET_PATTERNS" "$SKILL_PATH" --include="*.py" --include="*.js" --include="*.json" 2>/dev/null | grep -v "example\|sample\|placeholder"; then
   echo "⚠️  Found potential hardcoded credentials"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}hardcoded_creds,"
   ((ISSUES++))
 else
   echo "✅ No hardcoded secrets detected"
@@ -445,6 +457,7 @@ echo "=== Time Bomb Detection ==="
 TIME_BOMBS='sleep.*[0-9]{3,}|setTimeout.*[0-9]{4,}|setInterval|crontab|at\s+now'
 if grep -rEi "$TIME_BOMBS" "$SKILL_PATH" 2>/dev/null; then
   echo "⚠️  Found delayed execution (possible evasion)"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}time_bomb,"
   ((ISSUES+=3))
 else
   echo "✅ No time-delayed execution"
@@ -456,6 +469,7 @@ echo "=== Persistence Mechanisms ==="
 PERSIST='crontab|systemd|\.bashrc|\.profile|rc\.local|autostart|startup'
 if grep -rEi "$PERSIST" "$SKILL_PATH" 2>/dev/null | grep -v "example\|comment\|#"; then
   echo "⚠️  Found persistence mechanisms"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}persistence,"
   ((ISSUES+=5))
 else
   echo "✅ No persistence mechanisms"
@@ -493,6 +507,7 @@ RESULTS=$(grep -rEi "$EXFIL_PATTERNS" "$SKILL_PATH" --include="*.py" --include="
 if [ -n "$RESULTS" ]; then
   echo "ℹ️  Found network calls (review manually):"
   echo "$RESULTS"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}network_calls,"
 else
   echo "✅ No obvious network calls"
 fi
@@ -561,6 +576,7 @@ echo ""
 echo "=== Prerequisite Trap Check ==="
 if grep -rEi "install.*first|prerequisite|required.*before|dependency.*manual" "$SKILL_PATH"/*.md 2>/dev/null; then
   echo "⚠️  README mentions prerequisites - CHECK MANUALLY for trap patterns"
+  AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}prereq_trap,"
   ((ISSUES++))
 else
   echo "✅ No prerequisite instructions found"
@@ -776,7 +792,21 @@ fi
 [ "$MONITOR_ISSUES" -eq 0 ] && echo "✅ No covert file monitoring patterns detected"
 echo ""
 
-# 27. LLM Semantic Analysis (opt-in: --llm flag)
+# 27. LLM Semantic Analysis
+# Triggers: --llm flag (always), OR auto-escalation when ambiguous findings + LLM configured
+AUTO_LLM=false
+if [ "$USE_LLM" != "true" ] && [ "$NO_LLM" != "true" ] && [ -n "$AMBIGUOUS_FLAGS" ] && [ -f "$CONFIG_FILE" ]; then
+  SAVED_PROVIDER=$(grep "^LLM_PROVIDER=" "$CONFIG_FILE" 2>/dev/null | cut -d= -f2)
+  if [ -n "$SAVED_PROVIDER" ] && [ "$SAVED_PROVIDER" != "none" ]; then
+    AUTO_LLM=true
+    USE_LLM=true
+    echo ""
+    echo "🔎 Pattern modules flagged ambiguous findings: $(echo "$AMBIGUOUS_FLAGS" | sed 's/,$//' | tr ',' ', ')"
+    echo "   Auto-escalating to LLM for deeper analysis..."
+    echo ""
+  fi
+fi
+
 if [ "$USE_LLM" = "true" ]; then
   echo "=== LLM Semantic Analysis ==="
 
@@ -865,9 +895,9 @@ if [ "$USE_LLM" = "true" ]; then
       EST_TOKENS=$(( CHAR_COUNT / 4 ))
       echo "ℹ️  Estimated input: ~${EST_TOKENS} tokens"
 
-      # Confirm unless --yes
+      # Confirm unless --yes or auto-escalation
       PROCEED=true
-      if [ "$SKIP_CONFIRM" != "true" ]; then
+      if [ "$SKIP_CONFIRM" != "true" ] && [ "$AUTO_LLM" != "true" ]; then
         printf "   Run LLM analysis? [y/N] "
         read -r CONFIRM < /dev/tty
         [ "$CONFIRM" != "y" ] && [ "$CONFIRM" != "Y" ] && PROCEED=false
