@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.3.5 (2026-02-25 — LLM module accepts OAuth Bearer token in addition to API key)
+# Version: 2.3.6 (2026-02-25 — LLM module is provider-agnostic: any OpenAI-compat endpoint via LLM_API_URL + LLM_BEARER_TOKEN)
 
 SKILL_PATH=""
 USE_LLM=false
@@ -496,34 +496,49 @@ if [ "$USE_LLM" = "true" ]; then
   LLM_BACKEND=""
   LLM_MODEL_NAME="${SKILL_SCANNER_LLM_MODEL:-}"
 
-  # Auth state for Anthropic (resolved below)
-  LLM_AUTH_TYPE=""    # "apikey" or "oauth"
+  # Auth state (resolved below)
+  LLM_AUTH_TYPE=""    # "apikey" | "oauth" | "bearer"
   LLM_AUTH_TOKEN=""
+  LLM_API_ENDPOINT=""
 
   if curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
+    # 1. Ollama — local, nothing leaves the machine
     LLM_BACKEND="ollama"
     [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="llama3"
     echo "ℹ️  Backend: Ollama (local) — model: $LLM_MODEL_NAME"
     echo "ℹ️  No data leaves this machine"
+  elif [ -n "$LLM_API_URL" ] && [ -n "$LLM_BEARER_TOKEN" ]; then
+    # 2. Generic OpenAI-compatible endpoint (OpenRouter, Together, OpenAI, custom proxy, etc.)
+    LLM_BACKEND="openai_compat"
+    LLM_AUTH_TYPE="bearer"
+    LLM_AUTH_TOKEN="$LLM_BEARER_TOKEN"
+    LLM_API_ENDPOINT="${LLM_API_URL%/}/chat/completions"
+    [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="gpt-4o-mini"
+    echo "ℹ️  Backend: OpenAI-compatible — ${LLM_API_URL} — model: $LLM_MODEL_NAME"
+    echo "⚠️  Skill content will be sent to: $LLM_API_URL"
   elif [ -n "$ANTHROPIC_API_KEY" ]; then
+    # 3a. Anthropic — API key
     LLM_BACKEND="anthropic"
     LLM_AUTH_TYPE="apikey"
     LLM_AUTH_TOKEN="$ANTHROPIC_API_KEY"
     [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="claude-sonnet-4-6"
-    echo "ℹ️  Backend: Anthropic API (API key) — model: $LLM_MODEL_NAME"
+    echo "ℹ️  Backend: Anthropic (API key) — model: $LLM_MODEL_NAME"
     echo "⚠️  Skill content will be sent to Anthropic's API"
   elif [ -n "$ANTHROPIC_OAUTH_TOKEN" ]; then
+    # 3b. Anthropic — OAuth Bearer token
     LLM_BACKEND="anthropic"
     LLM_AUTH_TYPE="oauth"
     LLM_AUTH_TOKEN="$ANTHROPIC_OAUTH_TOKEN"
     [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="claude-sonnet-4-6"
-    echo "ℹ️  Backend: Anthropic API (OAuth) — model: $LLM_MODEL_NAME"
+    echo "ℹ️  Backend: Anthropic (OAuth) — model: $LLM_MODEL_NAME"
     echo "⚠️  Skill content will be sent to Anthropic's API"
   else
     echo "⚠️  No LLM backend available — skipping"
-    echo "    Local:  ollama serve  (nothing leaves your machine)"
-    echo "    Cloud:  export ANTHROPIC_API_KEY=<key>"
-    echo "            export ANTHROPIC_OAUTH_TOKEN=<bearer-token>"
+    echo "    Local:   ollama serve                                    (nothing leaves your machine)"
+    echo "    Generic: export LLM_API_URL=https://openrouter.ai/api/v1"
+    echo "             export LLM_BEARER_TOKEN=<token>                 (OpenAI-compatible + Bearer auth)"
+    echo "    Cloud:   export ANTHROPIC_API_KEY=<key>"
+    echo "             export ANTHROPIC_OAUTH_TOKEN=<token>"
     echo ""
   fi
 
@@ -588,6 +603,29 @@ req = urllib.request.Request('http://localhost:11434/api/generate',
   data=data, headers={'Content-Type': 'application/json'})
 with urllib.request.urlopen(req, timeout=120) as r:
   print(json.load(r).get('response', ''))
+" 2>/dev/null)
+
+        elif [ "$LLM_BACKEND" = "openai_compat" ]; then
+          # Generic OpenAI-compatible endpoint (OpenRouter, Together, OpenAI, custom proxy, etc.)
+          LLM_RESPONSE=$(printf '%s' "$USER_PROMPT" | \
+            LLM_AUTH_TOKEN="${LLM_AUTH_TOKEN}" LLM_API_ENDPOINT="${LLM_API_ENDPOINT}" \
+            python3 -c "
+import json, sys, urllib.request, os
+prompt = sys.stdin.read()
+token    = os.environ.get('LLM_AUTH_TOKEN', '')
+endpoint = os.environ.get('LLM_API_ENDPOINT', '')
+data = json.dumps({
+  'model': '${LLM_MODEL_NAME}',
+  'max_tokens': 1024,
+  'messages': [
+    {'role': 'system', 'content': '${SYSTEM_PROMPT}'},
+    {'role': 'user',   'content': prompt}
+  ]
+}).encode()
+req = urllib.request.Request(endpoint, data=data,
+  headers={'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token})
+with urllib.request.urlopen(req, timeout=60) as r:
+  print(json.load(r)['choices'][0]['message']['content'])
 " 2>/dev/null)
 
         elif [ "$LLM_BACKEND" = "anthropic" ]; then

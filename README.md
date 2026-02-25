@@ -125,16 +125,27 @@ SKILL_SCANNER_LLM_MODEL=claude-opus-4-6 skill-scan-v2.sh ./some-skill --llm
 
 The scanner tries backends in this order:
 
-1. **Ollama** (local) — If `ollama serve` is running on `localhost:11434`, it uses that. **Nothing leaves your machine.**
-2. **Anthropic API** (cloud fallback) — If `ANTHROPIC_API_KEY` is set. Skill content is sent to Anthropic's servers. You are warned before this happens.
-3. **Neither available** — Module skips cleanly with instructions on how to set up a backend.
+1. **Ollama** (local) — If `ollama serve` is running on `localhost:11434`. **Nothing leaves your machine.**
+2. **Generic OpenAI-compatible endpoint** — Any provider that speaks OpenAI's API format (OpenRouter, Together.ai, OpenAI, custom proxies, local compat servers). Set `LLM_API_URL` + `LLM_BEARER_TOKEN`.
+3. **Anthropic** — API key (`ANTHROPIC_API_KEY`) or OAuth Bearer token (`ANTHROPIC_OAUTH_TOKEN`).
+4. **None available** — Module skips cleanly with setup instructions.
 
 ```bash
-# Cloud fallback — API key
+# Local (nothing leaves your machine)
+ollama serve && ollama pull llama3
+skill-scan-v2.sh ./skill --llm
+
+# Generic OpenAI-compatible (OpenRouter, Together, OpenAI, any proxy)
+export LLM_API_URL=https://openrouter.ai/api/v1
+export LLM_BEARER_TOKEN=sk-or-...
+export SKILL_SCANNER_LLM_MODEL=mistral-7b-instruct
+skill-scan-v2.sh ./skill --llm
+
+# Anthropic — API key
 export ANTHROPIC_API_KEY=sk-ant-...
 skill-scan-v2.sh ./skill --llm
 
-# Cloud fallback — OAuth Bearer token
+# Anthropic — OAuth Bearer token
 export ANTHROPIC_OAUTH_TOKEN=<your-oauth-token>
 skill-scan-v2.sh ./skill --llm
 
@@ -161,9 +172,13 @@ export YARA_RULES="/path/to/custom-rules.yar"
 # LLM model override (default: llama3 for Ollama, claude-sonnet-4-6 for Anthropic)
 export SKILL_SCANNER_LLM_MODEL="mistral"
 
-# Anthropic cloud auth — use API key OR OAuth token (API key takes priority if both set)
-export ANTHROPIC_API_KEY="sk-ant-..."        # API key
-export ANTHROPIC_OAUTH_TOKEN="<token>"       # OAuth Bearer token (alternative)
+# Generic OpenAI-compatible cloud backend (OpenRouter, Together, OpenAI, custom proxy)
+export LLM_API_URL="https://openrouter.ai/api/v1"   # any OpenAI-compat base URL
+export LLM_BEARER_TOKEN="<token>"                    # Bearer token for that endpoint
+
+# Anthropic (fallback) — API key OR OAuth Bearer token
+export ANTHROPIC_API_KEY="sk-ant-..."        # API key  (x-api-key header)
+export ANTHROPIC_OAUTH_TOKEN="<token>"       # OAuth token (Authorization: Bearer header)
 ```
 
 ### YARA Rules

@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.6] - 2026-02-25
+
+### Changed
+- **LLM module is now provider-agnostic** — supports any OpenAI-compatible API endpoint via
+  `LLM_API_URL` + `LLM_BEARER_TOKEN`. Works with OpenRouter, Together.ai, OpenAI, custom proxies,
+  and any local OpenAI-compat server. Uses standard `/v1/chat/completions` + `Authorization: Bearer`.
+
+### Backend priority (updated)
+1. Ollama (local — nothing leaves the machine)
+2. Generic OpenAI-compatible (`LLM_API_URL` + `LLM_BEARER_TOKEN`)
+3. Anthropic API key (`ANTHROPIC_API_KEY` → `x-api-key` header)
+4. Anthropic OAuth (`ANTHROPIC_OAUTH_TOKEN` → `Authorization: Bearer` header)
+
+---
+
 ## [2.3.5] - 2026-02-25
 
 ### Added
