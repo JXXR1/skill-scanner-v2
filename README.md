@@ -130,8 +130,12 @@ The scanner tries backends in this order:
 3. **Neither available** — Module skips cleanly with instructions on how to set up a backend.
 
 ```bash
-# Cloud fallback
+# Cloud fallback — API key
 export ANTHROPIC_API_KEY=sk-ant-...
+skill-scan-v2.sh ./skill --llm
+
+# Cloud fallback — OAuth Bearer token
+export ANTHROPIC_OAUTH_TOKEN=<your-oauth-token>
 skill-scan-v2.sh ./skill --llm
 
 # Local only (Ollama)
@@ -157,8 +161,9 @@ export YARA_RULES="/path/to/custom-rules.yar"
 # LLM model override (default: llama3 for Ollama, claude-sonnet-4-6 for Anthropic)
 export SKILL_SCANNER_LLM_MODEL="mistral"
 
-# Anthropic API key (enables cloud LLM fallback)
-export ANTHROPIC_API_KEY="sk-ant-..."
+# Anthropic cloud auth — use API key OR OAuth token (API key takes priority if both set)
+export ANTHROPIC_API_KEY="sk-ant-..."        # API key
+export ANTHROPIC_OAUTH_TOKEN="<token>"       # OAuth Bearer token (alternative)
 ```
 
 ### YARA Rules

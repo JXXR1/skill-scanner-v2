@@ -64,8 +64,9 @@ else
     echo "     curl -fsSL https://ollama.com/install.sh | sh"
     echo "     ollama pull llama3"
     echo ""
-    echo "   To enable cloud LLM analysis:"
-    echo "     export ANTHROPIC_API_KEY=sk-ant-..."
+    echo "   To enable cloud LLM analysis (either one):"
+    echo "     export ANTHROPIC_API_KEY=sk-ant-...        # API key"
+    echo "     export ANTHROPIC_OAUTH_TOKEN=<token>       # OAuth Bearer token"
 fi
 
 # 5. Verify

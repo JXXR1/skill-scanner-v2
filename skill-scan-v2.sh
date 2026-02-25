@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.3.4 (2026-02-25 — add LLM semantic analysis; local-first via Ollama, Anthropic fallback)
+# Version: 2.3.5 (2026-02-25 — LLM module accepts OAuth Bearer token in addition to API key)
 
 SKILL_PATH=""
 USE_LLM=false
@@ -496,6 +496,10 @@ if [ "$USE_LLM" = "true" ]; then
   LLM_BACKEND=""
   LLM_MODEL_NAME="${SKILL_SCANNER_LLM_MODEL:-}"
 
+  # Auth state for Anthropic (resolved below)
+  LLM_AUTH_TYPE=""    # "apikey" or "oauth"
+  LLM_AUTH_TOKEN=""
+
   if curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
     LLM_BACKEND="ollama"
     [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="llama3"
@@ -503,13 +507,23 @@ if [ "$USE_LLM" = "true" ]; then
     echo "ℹ️  No data leaves this machine"
   elif [ -n "$ANTHROPIC_API_KEY" ]; then
     LLM_BACKEND="anthropic"
+    LLM_AUTH_TYPE="apikey"
+    LLM_AUTH_TOKEN="$ANTHROPIC_API_KEY"
     [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="claude-sonnet-4-6"
-    echo "ℹ️  Backend: Anthropic API — model: $LLM_MODEL_NAME"
-    echo "⚠️  Skill content will be sent to Anthropic's API (your key, their servers)"
+    echo "ℹ️  Backend: Anthropic API (API key) — model: $LLM_MODEL_NAME"
+    echo "⚠️  Skill content will be sent to Anthropic's API"
+  elif [ -n "$ANTHROPIC_OAUTH_TOKEN" ]; then
+    LLM_BACKEND="anthropic"
+    LLM_AUTH_TYPE="oauth"
+    LLM_AUTH_TOKEN="$ANTHROPIC_OAUTH_TOKEN"
+    [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="claude-sonnet-4-6"
+    echo "ℹ️  Backend: Anthropic API (OAuth) — model: $LLM_MODEL_NAME"
+    echo "⚠️  Skill content will be sent to Anthropic's API"
   else
     echo "⚠️  No LLM backend available — skipping"
-    echo "    Local:  start Ollama  →  ollama serve"
+    echo "    Local:  ollama serve  (nothing leaves your machine)"
     echo "    Cloud:  export ANTHROPIC_API_KEY=<key>"
+    echo "            export ANTHROPIC_OAUTH_TOKEN=<bearer-token>"
     echo ""
   fi
 
@@ -577,22 +591,26 @@ with urllib.request.urlopen(req, timeout=120) as r:
 " 2>/dev/null)
 
         elif [ "$LLM_BACKEND" = "anthropic" ]; then
-          LLM_RESPONSE=$(printf '%s' "$USER_PROMPT" | python3 -c "
+          LLM_RESPONSE=$(printf '%s' "$USER_PROMPT" | \
+            LLM_AUTH_TYPE="${LLM_AUTH_TYPE}" LLM_AUTH_TOKEN="${LLM_AUTH_TOKEN}" \
+            python3 -c "
 import json, sys, urllib.request, os
 prompt = sys.stdin.read()
+auth_type  = os.environ.get('LLM_AUTH_TYPE', 'apikey')
+auth_token = os.environ.get('LLM_AUTH_TOKEN', '')
 data = json.dumps({
   'model': '${LLM_MODEL_NAME}',
   'max_tokens': 1024,
   'system': '${SYSTEM_PROMPT}',
   'messages': [{'role': 'user', 'content': prompt}]
 }).encode()
+headers = {'Content-Type': 'application/json', 'anthropic-version': '2023-06-01'}
+if auth_type == 'oauth':
+  headers['Authorization'] = 'Bearer ' + auth_token
+else:
+  headers['x-api-key'] = auth_token
 req = urllib.request.Request('https://api.anthropic.com/v1/messages',
-  data=data,
-  headers={
-    'Content-Type': 'application/json',
-    'x-api-key': os.environ.get('ANTHROPIC_API_KEY', ''),
-    'anthropic-version': '2023-06-01'
-  })
+  data=data, headers=headers)
 with urllib.request.urlopen(req, timeout=60) as r:
   print(json.load(r)['content'][0]['text'])
 " 2>/dev/null)

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.3.5] - 2026-02-25
+
+### Added
+- **OAuth Bearer token support for Anthropic backend** — module 27 now accepts
+  `ANTHROPIC_OAUTH_TOKEN` in addition to `ANTHROPIC_API_KEY`. Uses `Authorization: Bearer <token>`
+  header when OAuth token is set, `x-api-key` header for API key. API key takes priority if both
+  are set. Allows use without a direct API key (e.g. OAuth apps, org-managed tokens).
+
+---
+
 ## [2.3.4] - 2026-02-25
 
 ### Added
