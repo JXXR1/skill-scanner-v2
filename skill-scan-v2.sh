@@ -3,33 +3,308 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.3.6 (2026-02-25 — LLM module is provider-agnostic: any OpenAI-compat endpoint via LLM_API_URL + LLM_BEARER_TOKEN)
+# Version: 2.4.0 (2026-02-25 — Interactive setup wizard, persistent config, provider-agnostic LLM)
 
 SKILL_PATH=""
 USE_LLM=false
 SKIP_CONFIRM=false
+RUN_SETUP=false
+SHOW_VERSION=false
+CONFIG_FILE="${SKILL_SCANNER_CONFIG:-$HOME/.skill-scanner-v2.conf}"
 
 # Parse arguments
 for arg in "$@"; do
   case "$arg" in
-    --llm)   USE_LLM=true ;;
-    --yes|-y) SKIP_CONFIRM=true ;;
-    -*)      echo "Unknown flag: $arg" ;;
-    *)       [ -z "$SKILL_PATH" ] && SKILL_PATH="$arg" ;;
+    --llm)     USE_LLM=true ;;
+    --yes|-y)  SKIP_CONFIRM=true ;;
+    --setup)   RUN_SETUP=true ;;
+    --version) SHOW_VERSION=true ;;
+    --config)  echo "Config: $CONFIG_FILE"; [ -f "$CONFIG_FILE" ] && cat "$CONFIG_FILE" || echo "(not configured — run --setup)"; exit 0 ;;
+    -*)        echo "Unknown flag: $arg" ;;
+    *)         [ -z "$SKILL_PATH" ] && SKILL_PATH="$arg" ;;
   esac
 done
+
+# Version
+VERSION="2.4.0"
+if [ "$SHOW_VERSION" = "true" ]; then
+  echo "Skill Security Scanner v${VERSION}"
+  exit 0
+fi
 
 # Configuration
 YARA_RULES="${YARA_RULES:-/var/lib/yara/rules/openclaw-malware.yar}"
 
+# ── Load saved config (env vars override config file) ──
+load_config() {
+  if [ -f "$CONFIG_FILE" ]; then
+    # Source only known keys (safe subset)
+    while IFS='=' read -r key value; do
+      case "$key" in
+        LLM_PROVIDER)        [ -z "${LLM_PROVIDER:-}" ]        && export LLM_PROVIDER="$value" ;;
+        LLM_API_URL)         [ -z "${LLM_API_URL:-}" ]         && export LLM_API_URL="$value" ;;
+        LLM_BEARER_TOKEN)    [ -z "${LLM_BEARER_TOKEN:-}" ]    && export LLM_BEARER_TOKEN="$value" ;;
+        ANTHROPIC_API_KEY)   [ -z "${ANTHROPIC_API_KEY:-}" ]   && export ANTHROPIC_API_KEY="$value" ;;
+        ANTHROPIC_OAUTH_TOKEN) [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ] && export ANTHROPIC_OAUTH_TOKEN="$value" ;;
+        SKILL_SCANNER_LLM_MODEL) [ -z "${SKILL_SCANNER_LLM_MODEL:-}" ] && export SKILL_SCANNER_LLM_MODEL="$value" ;;
+        OLLAMA_MODEL)        [ -z "${OLLAMA_MODEL:-}" ]        && export OLLAMA_MODEL="$value" ;;
+      esac
+    done < "$CONFIG_FILE"
+  fi
+}
+
+# ── Interactive Setup Wizard ──
+run_setup() {
+  echo ""
+  echo "╔══════════════════════════════════════════════════╗"
+  echo "║   Skill Security Scanner v${VERSION} — Setup       ║"
+  echo "╚══════════════════════════════════════════════════╝"
+  echo ""
+  echo "The scanner has 26 pattern-based detection modules that"
+  echo "work offline with no configuration needed."
+  echo ""
+  echo "Optionally, you can enable LLM-powered semantic analysis"
+  echo "for deeper threat detection (catches social engineering,"
+  echo "subtle intent manipulation, and obfuscated threats that"
+  echo "pattern matching misses)."
+  echo ""
+  printf "Enable LLM analysis? (y/n) "
+  read -r ENABLE_LLM < /dev/tty
+
+  if [ "$ENABLE_LLM" != "y" ] && [ "$ENABLE_LLM" != "Y" ]; then
+    echo ""
+    echo "✅ No LLM configured. Pattern-based scanning is ready."
+    echo "   Run with: skill-scan-v2.sh <path>"
+    echo "   Re-run --setup anytime to add LLM later."
+    # Write minimal config
+    echo "LLM_PROVIDER=none" > "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+    echo "   Config saved: $CONFIG_FILE"
+    return
+  fi
+
+  echo ""
+  echo "Choose your LLM provider:"
+  echo ""
+  echo "  1. Local Ollama (free, private — nothing leaves your machine)"
+  echo "  2. OpenAI-compatible API (OpenRouter, Together, self-hosted, etc.)"
+  echo "  3. Anthropic API — API Key"
+  echo "  4. Anthropic API — OAuth Token"
+  echo "  5. Cancel"
+  echo ""
+  printf "Select [1-5]: "
+  read -r PROVIDER_CHOICE < /dev/tty
+
+  case "$PROVIDER_CHOICE" in
+    1)
+      echo ""
+      echo "Checking for Ollama..."
+      if curl -s --max-time 3 http://localhost:11434/api/tags >/dev/null 2>&1; then
+        AVAILABLE_MODELS=$(curl -s --max-time 5 http://localhost:11434/api/tags 2>/dev/null | python3 -c "
+import json,sys
+try:
+  data = json.load(sys.stdin)
+  models = [m['name'] for m in data.get('models',[])]
+  if models:
+    for i,m in enumerate(models,1): print(f'  {i}. {m}')
+  else: print('  (no models pulled yet)')
+except: print('  (could not list models)')
+" 2>/dev/null)
+        echo "✅ Ollama is running!"
+        echo ""
+        echo "Available models:"
+        echo "$AVAILABLE_MODELS"
+        echo ""
+        printf "Enter model name (or press Enter for llama3): "
+        read -r OLLAMA_MODEL_INPUT < /dev/tty
+        [ -z "$OLLAMA_MODEL_INPUT" ] && OLLAMA_MODEL_INPUT="llama3"
+
+        cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=${OLLAMA_MODEL_INPUT}
+SKILL_SCANNER_LLM_MODEL=${OLLAMA_MODEL_INPUT}
+EOF
+        chmod 600 "$CONFIG_FILE"
+        echo ""
+        echo "✅ Configured: Ollama (model: ${OLLAMA_MODEL_INPUT})"
+        echo "   No data will leave your machine."
+
+      else
+        echo "⚠️  Ollama is not running."
+        echo ""
+        echo "   To install: curl -fsSL https://ollama.ai/install.sh | sh"
+        echo "   To start:   ollama serve"
+        echo "   Then pull a model: ollama pull llama3"
+        echo ""
+        printf "Enter model name to save for later (default: llama3): "
+        read -r OLLAMA_MODEL_INPUT < /dev/tty
+        [ -z "$OLLAMA_MODEL_INPUT" ] && OLLAMA_MODEL_INPUT="llama3"
+
+        cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=ollama
+OLLAMA_MODEL=${OLLAMA_MODEL_INPUT}
+SKILL_SCANNER_LLM_MODEL=${OLLAMA_MODEL_INPUT}
+EOF
+        chmod 600 "$CONFIG_FILE"
+        echo ""
+        echo "✅ Config saved. Start Ollama before using --llm."
+      fi
+      ;;
+
+    2)
+      echo ""
+      echo "Enter your API endpoint URL"
+      echo "  Examples:"
+      echo "    https://openrouter.ai/api/v1"
+      echo "    https://api.together.xyz/v1"
+      echo "    http://localhost:8080/v1"
+      echo ""
+      printf "API URL: "
+      read -r API_URL_INPUT < /dev/tty
+
+      if [ -z "$API_URL_INPUT" ]; then
+        echo "❌ URL required. Setup cancelled."
+        return
+      fi
+
+      printf "API key/token: "
+      read -rs TOKEN_INPUT < /dev/tty
+      echo ""
+
+      if [ -z "$TOKEN_INPUT" ]; then
+        echo "❌ Token required. Setup cancelled."
+        return
+      fi
+
+      printf "Model name (default: gpt-4o-mini): "
+      read -r MODEL_INPUT < /dev/tty
+      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="gpt-4o-mini"
+
+      cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=openai_compat
+LLM_API_URL=${API_URL_INPUT}
+LLM_BEARER_TOKEN=${TOKEN_INPUT}
+SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
+EOF
+      chmod 600 "$CONFIG_FILE"
+      echo ""
+      echo "✅ Configured: ${API_URL_INPUT} (model: ${MODEL_INPUT})"
+      echo "   ⚠️  Skill content will be sent to this endpoint when using --llm"
+      ;;
+
+    3)
+      echo ""
+      printf "Enter your Anthropic API key: "
+      read -rs ANTHROPIC_INPUT < /dev/tty
+      echo ""
+
+      if [ -z "$ANTHROPIC_INPUT" ]; then
+        echo "❌ Key required. Setup cancelled."
+        return
+      fi
+
+      printf "Model name (default: claude-sonnet-4-6): "
+      read -r MODEL_INPUT < /dev/tty
+      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="claude-sonnet-4-6"
+
+      cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=anthropic
+ANTHROPIC_API_KEY=${ANTHROPIC_INPUT}
+SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
+EOF
+      chmod 600 "$CONFIG_FILE"
+      echo ""
+      echo "✅ Configured: Anthropic API Key (model: ${MODEL_INPUT})"
+      echo "   ⚠️  Skill content will be sent to Anthropic's API when using --llm"
+      ;;
+
+    4)
+      echo ""
+      printf "Enter your Anthropic OAuth token: "
+      read -rs ANTHROPIC_INPUT < /dev/tty
+      echo ""
+
+      if [ -z "$ANTHROPIC_INPUT" ]; then
+        echo "❌ Token required. Setup cancelled."
+        return
+      fi
+
+      printf "Model name (default: claude-sonnet-4-6): "
+      read -r MODEL_INPUT < /dev/tty
+      [ -z "$MODEL_INPUT" ] && MODEL_INPUT="claude-sonnet-4-6"
+
+      cat > "$CONFIG_FILE" << EOF
+LLM_PROVIDER=anthropic
+ANTHROPIC_OAUTH_TOKEN=${ANTHROPIC_INPUT}
+SKILL_SCANNER_LLM_MODEL=${MODEL_INPUT}
+EOF
+      chmod 600 "$CONFIG_FILE"
+      echo ""
+      echo "✅ Configured: Anthropic OAuth (model: ${MODEL_INPUT})"
+      echo "   ⚠️  Skill content will be sent to Anthropic's API when using --llm"
+      ;;
+
+    *)
+      echo "Setup cancelled."
+      return
+      ;;
+  esac
+
+  echo ""
+  echo "Config saved: $CONFIG_FILE"
+  echo ""
+  echo "Usage:"
+  echo "  skill-scan-v2.sh ./my-skill          # pattern scan only (always free)"
+  echo "  skill-scan-v2.sh ./my-skill --llm    # pattern scan + LLM analysis"
+  echo "  skill-scan-v2.sh --setup             # reconfigure anytime"
+  echo "  skill-scan-v2.sh --config            # show current config"
+}
+
+# Run setup if requested
+if [ "$RUN_SETUP" = "true" ]; then
+  run_setup
+  exit 0
+fi
+
+# Load config
+load_config
+
+# If --llm used but no config and no env vars, suggest setup
+if [ "$USE_LLM" = "true" ] && [ ! -f "$CONFIG_FILE" ] && \
+   [ -z "${LLM_API_URL:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${ANTHROPIC_OAUTH_TOKEN:-}" ]; then
+  # Check if Ollama is running (auto-detect without config)
+  if ! curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
+    echo ""
+    echo "⚠️  No LLM provider configured."
+    echo ""
+    echo "   Run: skill-scan-v2.sh --setup"
+    echo ""
+    echo "   This will walk you through choosing a provider (local Ollama,"
+    echo "   OpenAI-compatible API, or Anthropic) and save your config."
+    echo ""
+    echo "   Continuing with pattern-based scan only..."
+    echo ""
+    USE_LLM=false
+  fi
+fi
+
 if [ -z "$SKILL_PATH" ]; then
-  echo "Usage: skill-scan-v2.sh <skill-path-or-name> [--llm] [--yes]"
+  echo "Skill Security Scanner v${VERSION}"
+  echo ""
+  echo "Usage: skill-scan-v2.sh <skill-path-or-name> [options]"
+  echo ""
+  echo "Options:"
+  echo "  --llm       Enable LLM semantic analysis (requires provider config)"
+  echo "  --yes       Skip confirmation prompts"
+  echo "  --setup     Interactive setup wizard (configure LLM provider)"
+  echo "  --config    Show current configuration"
+  echo "  --version   Show version"
   echo ""
   echo "Examples:"
-  echo "  skill-scan-v2.sh ./my-skill"
-  echo "  skill-scan-v2.sh ./my-skill --llm          # add LLM semantic analysis (Ollama or Anthropic)"
+  echo "  skill-scan-v2.sh ./my-skill                # pattern scan (26 modules, free)"
+  echo "  skill-scan-v2.sh ./my-skill --llm          # + LLM semantic analysis"
   echo "  skill-scan-v2.sh ./my-skill --llm --yes    # skip confirmation prompt"
-  echo "  SKILL_SCANNER_LLM_MODEL=llama3 skill-scan-v2.sh ./my-skill --llm"
+  echo "  skill-scan-v2.sh --setup                   # configure LLM provider"
   exit 1
 fi
 
@@ -501,13 +776,21 @@ if [ "$USE_LLM" = "true" ]; then
   LLM_AUTH_TOKEN=""
   LLM_API_ENDPOINT=""
 
-  if curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
-    # 1. Ollama — local, nothing leaves the machine
-    LLM_BACKEND="ollama"
-    [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="llama3"
-    echo "ℹ️  Backend: Ollama (local) — model: $LLM_MODEL_NAME"
-    echo "ℹ️  No data leaves this machine"
-  elif [ -n "$LLM_API_URL" ] && [ -n "$LLM_BEARER_TOKEN" ]; then
+  # Use saved config provider hint if available
+  CONFIGURED_PROVIDER="${LLM_PROVIDER:-auto}"
+
+  if [ "$CONFIGURED_PROVIDER" = "ollama" ] || ([ "$CONFIGURED_PROVIDER" = "auto" ] && curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1); then
+    if curl -s --max-time 2 http://localhost:11434/api/tags >/dev/null 2>&1; then
+      # 1. Ollama — local, nothing leaves the machine
+      LLM_BACKEND="ollama"
+      [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="${OLLAMA_MODEL:-llama3}"
+      echo "ℹ️  Backend: Ollama (local) — model: $LLM_MODEL_NAME"
+      echo "ℹ️  No data leaves this machine"
+    else
+      echo "⚠️  Ollama configured but not running. Start with: ollama serve"
+      echo ""
+    fi
+  elif [ "$CONFIGURED_PROVIDER" = "openai_compat" ] || ([ "$CONFIGURED_PROVIDER" = "auto" ] && [ -n "$LLM_API_URL" ] && [ -n "$LLM_BEARER_TOKEN" ]); then
     # 2. Generic OpenAI-compatible endpoint (OpenRouter, Together, OpenAI, custom proxy, etc.)
     LLM_BACKEND="openai_compat"
     LLM_AUTH_TYPE="bearer"
@@ -516,8 +799,8 @@ if [ "$USE_LLM" = "true" ]; then
     [ -z "$LLM_MODEL_NAME" ] && LLM_MODEL_NAME="gpt-4o-mini"
     echo "ℹ️  Backend: OpenAI-compatible — ${LLM_API_URL} — model: $LLM_MODEL_NAME"
     echo "⚠️  Skill content will be sent to: $LLM_API_URL"
-  elif [ -n "$ANTHROPIC_API_KEY" ]; then
-    # 3a. Anthropic — API key
+  elif [ "$CONFIGURED_PROVIDER" = "anthropic" ] || ([ "$CONFIGURED_PROVIDER" = "auto" ] && [ -n "$ANTHROPIC_API_KEY" ]); then
+    # 3a. Anthropic — API key (check key first, then oauth)
     LLM_BACKEND="anthropic"
     LLM_AUTH_TYPE="apikey"
     LLM_AUTH_TOKEN="$ANTHROPIC_API_KEY"
@@ -534,6 +817,10 @@ if [ "$USE_LLM" = "true" ]; then
     echo "⚠️  Skill content will be sent to Anthropic's API"
   else
     echo "⚠️  No LLM backend available — skipping"
+    echo ""
+    echo "    Run: skill-scan-v2.sh --setup    (interactive configuration wizard)"
+    echo ""
+    echo "    Or set environment variables manually:"
     echo "    Local:   ollama serve                                    (nothing leaves your machine)"
     echo "    Generic: export LLM_API_URL=https://openrouter.ai/api/v1"
     echo "             export LLM_BEARER_TOKEN=<token>                 (OpenAI-compatible + Bearer auth)"
