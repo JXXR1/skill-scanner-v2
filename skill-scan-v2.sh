@@ -3,7 +3,7 @@
 # Enhanced behavioral analysis for OpenClaw/AgentPress skills
 # Author: JXXR1
 # License: MIT
-# Version: 2.6.0 (2026-02-25 — Auto-escalation: LLM engages automatically on ambiguous findings)
+# Version: 3.0.0 (2026-02-25 — AST taint tracking: real source→sink data flow analysis across Python/JS/Shell)
 
 SKILL_PATH=""
 USE_LLM=false
@@ -29,7 +29,7 @@ for arg in "$@"; do
 done
 
 # Version
-VERSION="2.6.0"
+VERSION="3.0.0"
 if [ "$SHOW_VERSION" = "true" ]; then
   echo "Skill Security Scanner v${VERSION}"
   exit 0
@@ -790,6 +790,29 @@ if [ -n "$POLLING_LOOP" ]; then
   ((ISSUES+=8))
 fi
 [ "$MONITOR_ISSUES" -eq 0 ] && echo "✅ No covert file monitoring patterns detected"
+echo ""
+
+# 28. AST Taint Tracking (source → sink data flow analysis)
+echo "=== AST Taint Analysis ==="
+if command -v python3 &> /dev/null && [ -f "/usr/local/bin/skill-scan-taint.py" ]; then
+  TAINT_OUTPUT=$(python3 /usr/local/bin/skill-scan-taint.py "$SKILL_PATH" 2>&1)
+  TAINT_EXIT=$?
+  echo "$TAINT_OUTPUT"
+
+  if [ $TAINT_EXIT -eq 2 ]; then
+    echo "🚫 CRITICAL taint flows detected — data flows from sensitive sources to network/exec sinks"
+    AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}taint_critical,"
+    ((ISSUES+=10))
+  elif [ $TAINT_EXIT -eq 1 ]; then
+    echo "⚠️  Suspicious taint flows detected — review data flow paths above"
+    AMBIGUOUS_FLAGS="${AMBIGUOUS_FLAGS}taint_suspicious,"
+    ((ISSUES+=5))
+  else
+    echo "✅ No taint flows detected"
+  fi
+else
+  echo "ℹ️  Taint tracker not available (requires python3 + /usr/local/bin/skill-scan-taint.py)"
+fi
 echo ""
 
 # 27. LLM Semantic Analysis
