@@ -48,17 +48,17 @@ AI agent skills can execute arbitrary code with your permissions. A malicious sk
 19. **YARA Signatures** — Malware signature scanning with custom rulesets
 
 **Intent & Behavioral Analysis (20–26)**
-20. **Prompt Injection** — Jailbreaks, role overrides, hidden instructions in skill files
-21. **Context Poisoning** — Memory file manipulation, SOUL.md/MEMORY.md targeting
-22. **Credential Harvesting** — Patterns designed to extract auth tokens and API keys
-23. **Social Engineering** — Instructions targeting human operators in README/docs
-24. **Supply Chain** — Dependency confusion, typosquatting in install scripts
+20. **Social Engineering** — README/doc patterns designed to trick operators into running malicious commands; urgency/authority manipulation
+21. **Prompt Injection** — Jailbreaks, role overrides, hidden instructions in SKILL.md
+22. **Credential Path Detection** — OpenClaw-specific patterns targeting `.env`, `authorized_keys`, secrets paths
+23. **Sensitive Read + Exfiltration Combo** — Detects context clone / data exfiltration chains (read sensitive file → send externally)
+24. **Permission Manifest Check** — Flags overly broad or undeclared permissions in skill manifests
 25. **MoltGuard Schema** — Validates against known malicious OpenClaw skill structures
-26. **Covert File Monitoring** — `inotify`/`chokidar`/`fs.watch` targeting sensitive files
+26. **Covert File Monitoring** — `inotify`/`chokidar`/`fs.watch`/`pyinotify` targeting MEMORY.md, SOUL.md, `.env`
 
 **Advanced Analysis (27–28)** *(new in v3.0.0)*
-27. **AST Taint Tracking** — Traces data flow from user input to dangerous sinks (`eval`, `exec`, `subprocess`, `os.system`) across Python files
-28. **Cross-Language Source→Sink Analysis** — Same taint tracking extended to JavaScript and Shell scripts
+27. **AST Taint Tracking** — Traces data flow from user input to dangerous sinks (`eval`, `exec`, `subprocess`, `os.system`) across Python, JS, and Shell
+28. **LLM Semantic Analysis** — AI-powered intent analysis; catches social engineering, obfuscated threats, and prompt injection that passes static analysis *(requires `--llm`)*
 
 ### LLM Semantic Analysis *(optional)*
 Pass `--llm` to run an additional AI-powered semantic analysis layer that catches:

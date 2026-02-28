@@ -630,6 +630,32 @@ else
 fi
 echo ""
 
+# 20. Social Engineering / README Manipulation
+# Detects README or doc content designed to trick human operators into running malicious commands
+echo "=== Social Engineering / README Manipulation ==="
+SOCIAL_ENG_PATTERNS='(run|execute|paste).{0,30}(terminal|console|shell|command line).{0,60}(before|first|setup|install|activate)|IMPORTANT.{0,20}(run|execute|paste|type)|to (activate|unlock|enable).{0,40}(paste|run|execute)|requires?.{0,30}(special|manual|admin).{0,30}(step|action|command)|for (best results|full functionality|proper setup).{0,50}(run|execute|type)|WARNING.{0,30}(must|required).{0,30}(run|execute)'
+SE_URGENCY='(critical|urgent|required|mandatory|must run).{0,30}(before|first|now).{0,30}(use|install|start)'
+SE_AUTHORITY='(developer|author|team).{0,20}(recommends|requires|instructs).{0,40}(run|execute|paste)'
+
+README_FILES=$(find "$SKILL_PATH" -iname "README*" -o -iname "INSTALL*" -o -iname "SETUP*" 2>/dev/null)
+SE_ISSUES=0
+for README in $README_FILES; do
+  if grep -iE "$SOCIAL_ENG_PATTERNS" "$README" 2>/dev/null; then
+    echo "⚠️  SOCIAL ENGINEERING pattern in: $README"
+    ((SE_ISSUES++))
+    ((WARNINGS++))
+  fi
+  if grep -iE "$SE_URGENCY|$SE_AUTHORITY" "$README" 2>/dev/null; then
+    echo "⚠️  URGENCY/AUTHORITY manipulation in: $README"
+    ((SE_ISSUES++))
+    ((WARNINGS++))
+  fi
+done
+if [ "$SE_ISSUES" -eq 0 ]; then
+  echo "✅ No social engineering patterns in documentation"
+fi
+echo ""
+
 # 21. Prompt Injection / Intent Analysis (u/EthicsMd gap)
 # Scans skill.md INSTRUCTIONS for malicious intent — catches technically clean but semantically evil skills
 echo "=== Prompt Injection & Intent Analysis ==="
@@ -792,7 +818,7 @@ fi
 [ "$MONITOR_ISSUES" -eq 0 ] && echo "✅ No covert file monitoring patterns detected"
 echo ""
 
-# 28. AST Taint Tracking (source → sink data flow analysis)
+# 27. AST Taint Tracking (source → sink data flow analysis)
 echo "=== AST Taint Analysis ==="
 if command -v python3 &> /dev/null && [ -f "/usr/local/bin/skill-scan-taint.py" ]; then
   TAINT_OUTPUT=$(python3 /usr/local/bin/skill-scan-taint.py "$SKILL_PATH" 2>&1)
@@ -815,7 +841,7 @@ else
 fi
 echo ""
 
-# 27. LLM Semantic Analysis
+# 28. LLM Semantic Analysis
 # Triggers: --llm flag (always), OR auto-escalation when ambiguous findings + LLM configured
 AUTO_LLM=false
 if [ "$USE_LLM" != "true" ] && [ "$NO_LLM" != "true" ] && [ -n "$AMBIGUOUS_FLAGS" ] && [ -f "$CONFIG_FILE" ]; then
